@@ -1,0 +1,194 @@
+---
+title: "Análisis Estadístico de Eficiencia y Letalidad Hospitalaria"
+subtitle: "Evaluación comparativa: Sector Público vs. Privado (Ecuador 2024)"
+author: "Departamento de Ciencia de Datos - UNACH"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    number_sections: true
+    code_folding: hide
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+# ==============================================================================
+# CONFIGURACIÓN DEL ENTORNO
+# ==============================================================================
+knitr::opts_chunk$set(
+  echo = FALSE,      # Ocultamos código por defecto para reporte ejecutivo
+  warning = FALSE,   # Omitimos warnings
+  message = FALSE,   # Omitimos mensajes de carga
+  fig.align = "center",
+  fig.width = 8,
+  fig.height = 5,
+  fig.pos = "H"
+)
+
+# Librerías
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+library(scales)
+library(ggthemes)
+library(broom)
+
+# Carga de Datos (Asegúrate que la ruta es correcta en tu PC)
+ruta_datos <- "../data/processed/egresos_limpios_2024.rds"
+if (!file.exists(ruta_datos)) stop("No se encuentra el archivo .rds procesado.")
+egresos <- readRDS(ruta_datos)
+
+# Paleta de colores
+cols_sector <- c("Público" = "#2c3e50", "Privado" = "#e74c3c")
+
+```
+
+# Introducción
+
+El presente informe expone los resultados del análisis estadístico inferencial aplicado a la base de datos de Egresos Hospitalarios 2024. El objetivo es validar, mediante pruebas de hipótesis y cálculo de probabilidades, si existen discrepancias estructurales en la gestión sanitaria entre los sectores público y privado.
+
+El análisis se estructura en tres componentes metodológicos:
+
+1. **Análisis Descriptivo:** Medidas de tendencia central sobre la estancia hospitalaria.
+2. **Probabilidad Condicional:** Estimación del riesgo relativo de mortalidad.
+3. **Inferencia Estadística:** Prueba t-Student de Welch para diferencia de medias.
+
+---
+
+# Metodología 1: Análisis de Eficiencia Operativa
+
+Se evalúa la variable **Días de Estada** como indicador de eficiencia en la gestión de camas.
+
+## Estadísticos Descriptivos
+
+La Tabla 1 resume el comportamiento de la estancia hospitalaria. Se observa una diferencia notable en los tiempos de gestión.
+
+```{r tabla_descriptiva}
+tabla_desc <- egresos %>%
+  group_by(tipo_gestion) %>%
+  summarise(
+    N = n(),
+    Media = mean(dia_estad, na.rm = TRUE),
+    Mediana = median(dia_estad, na.rm = TRUE),
+    Desv_Std = sd(dia_estad, na.rm = TRUE),
+    CV_Pct = (sd(dia_estad)/mean(dia_estad)) * 100
+  )
+
+kable(tabla_desc, digits = 2, 
+      col.names = c("Sector", "N (Casos)", "Media (Días)", "Mediana", "Desv. Estándar", "Coef. Var (%)"),
+      caption = "Tabla 1: Comparativa de Tiempos de Estancia") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = F, latex_options = "HOLD_position")
+
+```
+
+## Visualización de la Distribución
+
+```{r boxplot_eficiencia}
+ggplot(egresos, aes(x = tipo_gestion, y = dia_estad, fill = tipo_gestion)) +
+  geom_boxplot(outlier.shape = 21, outlier.alpha = 0.1, width = 0.5) +
+  coord_cartesian(ylim = c(0, 15)) + # Zoom a los primeros 15 días
+  scale_fill_manual(values = cols_sector) +
+  labs(
+    title = "Distribución de la Estancia Hospitalaria",
+    subtitle = "La mediana pública (3 días) supera a la privada (1 día)",
+    y = "Días de Hospitalización (Zoom 0-15)",
+    x = "Sector"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+```
+
+**Interpretación de Resultados:**
+
+* **Brecha de Medias:** El sector público presenta una estancia media de **4.94 días**, frente a **3.41 días** del sector privado. Esta diferencia de ~1.5 días implica una rotación de camas significativamente más lenta en la red pública.
+* **Variabilidad (CV):** El sector privado muestra un Coeficiente de Variación extremadamente alto (**253%**). Esto indica una alta heterogeneidad: atiende mayoritariamente procedimientos muy cortos (Mediana = 1), pero mantiene casos específicos de larga estancia que inflan la desviación.
+
+---
+
+# Metodología 2: Análisis de Letalidad (Probabilidad)
+
+Se calcula la probabilidad condicional de fallecimiento dado el modelo de gestión: .
+
+```{r tabla_probabilidad}
+probabilidades <- egresos %>%
+  count(tipo_gestion, estado_salida) %>%
+  group_by(tipo_gestion) %>%
+  mutate(Prob = n / sum(n)) %>%
+  filter(estado_salida == "Fallecido") %>%
+  select(tipo_gestion, Fallecidos = n, Probabilidad = Prob) %>%
+  ungroup()
+
+# Cálculo de Riesgo Relativo
+rr <- probabilidades$Probabilidad[probabilidades$tipo_gestion == "Público"] / 
+      probabilidades$Probabilidad[probabilidades$tipo_gestion == "Privado"]
+
+kable(probabilidades %>% mutate(Probabilidad = percent(Probabilidad, accuracy = 0.01)), 
+      caption = "Tabla 2: Probabilidad Condicional de Letalidad") %>%
+  kable_styling(bootstrap_options = "striped", full_width = F, latex_options = "HOLD_position")
+
+```
+
+```{r grafico_letalidad}
+ggplot(probabilidades, aes(x = tipo_gestion, y = Probabilidad, fill = tipo_gestion)) +
+  geom_col(width = 0.6) +
+  geom_text(aes(label = percent(Probabilidad, accuracy = 0.01)), vjust = -0.5, fontface="bold") +
+  scale_fill_manual(values = cols_sector) +
+  scale_y_continuous(labels = percent_format(), limits = c(0, 0.025)) +
+  labs(
+    title = "Tasa de Letalidad por Sector",
+    y = "Probabilidad de Fallecimiento",
+    x = "Sector"
+  ) +
+  theme_classic() +
+  theme(legend.position = "none")
+
+```
+
+**Hallazgo - Riesgo Relativo:**
+El cálculo arroja un **Riesgo Relativo (RR) de `r round(rr, 2)`**.
+Esto significa que, basándonos en los datos crudos, es **1.38 veces más probable** que un egreso termine en fallecimiento en el sector público comparado con el privado.
+
+*Nota Técnica:* Este indicador no aísla la complejidad del paciente (Gravedad CIE-10), factor que suele ser mayor en hospitales de referencia pública.
+
+---
+
+# Metodología 3: Inferencia Estadística (Prueba de Hipótesis)
+
+Para determinar si la diferencia observada en la estancia media (4.94 vs 3.41) es estadísticamente significativa o producto del azar, se aplica la prueba **t-Student de Welch**.
+
+*  **Hipótesis nula (H₀):** \(\mu_{\text{público}} = \mu_{\text{privado}}\) _(Las medias son iguales)_ 
+*  **Hipótesis alternativa (H₁):** \(\mu_{\text{público}} \neq \mu_{\text{privado}}\) _(Las medias son diferentes)_
+
+
+```{r test_hipotesis}
+test_res <- t.test(dia_estad ~ tipo_gestion, data = egresos)
+tidy_test <- tidy(test_res)
+
+kable(tidy_test %>% select(estimate, statistic, p.value, conf.low, conf.high),
+      digits = 4,
+      col.names = c("Diferencia Estimada", "Estadístico t", "P-Valor", "IC Inf", "IC Sup"),
+      caption = "Tabla 3: Resultados de la Prueba t-Student de Welch") %>%
+  kable_styling(full_width = F, latex_options = "HOLD_position")
+
+```
+
+**Decisión Estadística:**
+Dado que el **p-valor (`r format(test_res$p.value, scientific=TRUE)`)** es infinitamente menor al nivel de significancia :
+
+> **SE RECHAZA LA HIPÓTESIS NULA ().**
+
+---
+
+# Conclusiones Generales
+
+- **Inequidad en Tiempos de Atención:**  
+  Existe evidencia estadística robusta (\(p < 2.2e^{-16}\)) para afirmar que el sector público mantiene a los pacientes hospitalizados, en promedio, **1.5 días más** que el sector privado. Esto sugiere diferencias en protocolos de alta, burocracia administrativa o tiempos de recuperación.
+
+- **Disparidad en Resultados Clínicos:**  
+  La tasa de letalidad del sector público (**1.73%**) supera a la del privado (**1.25%**).
+
+- **Variabilidad Operativa:**  
+  El sector privado, aunque más rápido en mediana (**1 día**), presenta una variabilidad extrema (\(CV > 250\%\)), lo que indica una operatividad dual: alta rotación en procedimientos electivos y estancias prolongadas selectivas.

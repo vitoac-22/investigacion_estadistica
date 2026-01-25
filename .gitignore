@@ -1,0 +1,14 @@
+# Path de archivos pesados
+data/processed/*.rds
+data/raw/*.rds
+.Rproj.user
+.Rhistory
+
+# Ignorar cualquier CSV en cualquier carpeta
+**/*.csv
+
+# O si es otro formato, igual:
+**/*.xlsx
+**/*.RData
+.DS_Store
+**/.DS_Store

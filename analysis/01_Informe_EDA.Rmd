@@ -1,0 +1,200 @@
+---
+title: "Análisis de Eficiencia y Letalidad Hospitalaria en Ecuador"
+subtitle: "Evaluación comparativa del desempeño entre el sector público y privado (Periodo 2024)"
+author: "Departamento de Ciencia de Datos - UNACH"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    theme: flatly
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    code_folding: hide
+    number_sections: true
+    fig_caption: true
+---
+
+```{r setup, include=FALSE}
+# ==============================================================================
+# CONFIGURACIÓN GLOBAL DEL ENTORNO
+# ==============================================================================
+knitr::opts_chunk$set(
+  echo = TRUE,       # El código está disponible (plegado) para revisión técnica
+  warning = FALSE,   # Se omiten advertencias de versiones de paquetes
+  message = FALSE,   # Se omiten mensajes de carga
+  fig.align = "center",
+  fig.width = 10,
+  fig.height = 6
+)
+
+# Carga de librerías analíticas
+library(tidyverse)
+library(scales)
+library(ggthemes)
+library(knitr)
+library(kableExtra)
+
+# Definición de paleta de colores corporativa/sobria
+cols_sector <- c("Público" = "#2c3e50", "Privado" = "#e74c3c")
+
+```
+
+```{r load_data, include=FALSE}
+# ==============================================================================
+# INGESTA DE DATOS PROCESADOS
+# ==============================================================================
+# Se carga el dataset limpio generado por el script '01_limpieza_datos.R'.
+# Ruta relativa asumiendo que el .Rmd está en la carpeta 'analysis/'
+
+ruta_datos <- "../data/processed/egresos_limpios_2024.rds"
+
+if (!file.exists(ruta_datos)) {
+  stop("ERROR CRÍTICO: No se encuentra el archivo 'egresos_limpios_2024.rds'. Ejecute primero el script 01_limpieza_datos.R")
+}
+
+egresos <- readRDS(ruta_datos)
+
+```
+
+# Introducción
+
+El presente informe técnico evalúa el desempeño del sistema hospitalario ecuatoriano durante el año 2024, utilizando como fuente primaria el Registro Estadístico de Egresos Hospitalarios del INEC. El análisis se centra en dos dimensiones críticas de gestión sanitaria:
+
+1. **Eficiencia Operativa:** Medida a través de la estancia media hospitalaria (días cama).
+2. **Calidad del Cuidado:** Aproximada mediante la tasa de letalidad hospitalaria.
+
+El estudio contrasta estas métricas entre los modelos de gestión **Público** (MSP, IESS, FFAA) y **Privado** (con y sin fines de lucro), controlando variables demográficas para evitar sesgos de interpretación.
+
+---
+
+# Metodología y Tratamiento de Datos
+
+La base de datos original ( millones) fue sometida a un proceso de auditoría y depuración para garantizar la integridad estadística. A continuación, se detallan las decisiones metodológicas aplicadas:
+
+## Reglas de Negocio y Limpieza
+
+Basado en el diagnóstico inicial de los datos, se establecieron los siguientes criterios de inclusión y transformación:
+
+1. **Estandarización de Edad:** Se unificaron las unidades de tiempo. Los registros de neonatos y lactantes (horas, días, meses) fueron convertidos a 0 años cumplidos para permitir el análisis numérico continuo.
+2. **Taxonomía del Sector:** Se agrupó la heterogeneidad de los establecimientos en dos macro-categorías:
+* *Público:* Incluye Red Pública Integral de Salud.
+* *Privado:* Unificación de entidades lucrativas y ONGs.
+
+
+3. **Definición de Letalidad:** La variable objetivo incluye tanto fallecimientos en urgencias (<48h) como mortalidad neta hospitalaria (>48h).
+4. **Tratamiento de Valores Atípicos (Outliers):** * Se detectaron errores de digitación severos (ej. estancias de 19,040 días).
+* **Criterio de Exclusión:** Se eliminaron registros con estancia hospitalaria `dia_estad > 365`. Esto excluye errores de captura y casos de institucionalización crónica que distorsionan el promedio de eficiencia en agudos.
+
+
+
+## Caracterización de la Muestra Final
+
+La muestra depurada presenta la siguiente distribución operativa:
+
+```{r tabla_resumen}
+# Generación de tabla descriptiva
+tabla_resumen <- egresos %>%
+  group_by(tipo_gestion) %>%
+  summarise(
+    N_Pacientes = n(),
+    Participacion = n() / nrow(egresos),
+    Edad_Media = mean(edad_anios, na.rm = TRUE),
+    Estancia_Media = mean(dia_estad, na.rm = TRUE),
+    Letalidad_Pct = mean(es_fallecido, na.rm = TRUE) * 100
+  )
+
+# Renderizado HTML
+tabla_resumen %>%
+  mutate(Participacion = percent(Participacion, accuracy = 0.1)) %>%
+  kable(
+    digits = 2,
+    col.names = c("Sector", "N (Egresos)", "% Mercado", "Edad Media (Años)", "Estancia Media (Días)", "Letalidad (%)"),
+    caption = "Tabla 1: Resumen Estadístico por Modelo de Gestión"
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = F)
+
+```
+
+**Nota Técnica:** Se observa una predominancia del sector público en volumen de atención. La diferencia en la edad media sugiere perfiles epidemiológicos distintos entre sectores.
+
+---
+
+# Resultados: Análisis de Eficiencia
+
+La variable **Días de Estada** actúa como *proxy* del consumo de recursos. Una estancia prolongada injustificada implica ineficiencia administrativa o complicaciones clínicas.
+
+## Distribución de la Estancia Hospitalaria
+
+Debido a la naturaleza asimétrica de la variable, se visualiza la distribución truncada a 15 días para apreciar la tendencia central.
+
+```{r plot_estancia}
+# Gráfico de cajas (Boxplot)
+ggplot(egresos, aes(x = tipo_gestion, y = dia_estad, fill = tipo_gestion)) +
+  geom_boxplot(outlier.shape = 21, outlier.alpha = 0.2, alpha = 0.8) +
+  # Zoom a la zona de interés (0-15 días) para evitar que los outliers aplasten el gráfico
+  coord_cartesian(ylim = c(0, 15)) +
+  scale_fill_manual(values = cols_sector) +
+  labs(
+    title = "Distribución de Días de Estada por Sector",
+    subtitle = "Comparativa de medianas y dispersión (Zoom: 0-15 días)",
+    x = "Modelo de Gestión",
+    y = "Días de Hospitalización",
+    caption = "Nota: Se han ocultado visualmente estancias > 15 días para facilitar la lectura."
+  ) +
+  theme_fivethirtyeight() +
+  theme(legend.position = "none", axis.title = element_text())
+
+```
+
+**Interpretación:**
+Los datos sugieren una diferencia en la gestión del tiempo cama. El análisis visual indica si existen colas más largas en el sector público, lo cual deberá ser corroborado con pruebas de hipótesis en fases posteriores.
+
+---
+
+# Resultados: Análisis de Letalidad
+
+La letalidad hospitalaria mide la proporción de egresos que resultan en fallecimiento. Este indicador se desglosa por sexo para controlar el sesgo obstétrico (partos en mujeres).
+
+```{r plot_letalidad}
+# Cálculo de tasas por grupo
+data_plot_letalidad <- egresos %>%
+  group_by(tipo_gestion, sexo_cat) %>%
+  summarise(
+    tasa = mean(es_fallecido, na.rm = TRUE) * 100,
+    error_std = sd(es_fallecido)/sqrt(n()) * 100, # Para barras de error
+    .groups = 'drop'
+  )
+
+# Gráfico de Barras con Facetas
+ggplot(data_plot_letalidad, aes(x = tipo_gestion, y = tasa, fill = sexo_cat)) +
+  geom_col(position = position_dodge(width = 0.9), alpha = 0.9) +
+  geom_text(aes(label = round(tasa, 2)), 
+            position = position_dodge(width = 0.9), 
+            vjust = -0.5, size = 3.5, fontface = "bold") +
+  scale_fill_brewer(palette = "Set2") +
+  labs(
+    title = "Tasa de Mortalidad Hospitalaria (%)",
+    subtitle = "Desglose por Sector y Sexo del Paciente",
+    x = "Sector",
+    y = "% Fallecidos",
+    fill = "Sexo"
+  ) +
+  theme_minimal() +
+  theme(panel.grid.major.x = element_blank())
+
+```
+
+**Hallazgo Crítico:**
+Se evidencia el impacto del **sesgo obstétrico**. La tasa de mortalidad en mujeres es consistentemente menor que en hombres. Esto no necesariamente implica mayor resistencia biológica, sino que una gran proporción de ingresos femeninos corresponde a partos (eventos de bajo riesgo vital), lo que "diluye" la tasa de mortalidad general de ese grupo.
+
+---
+
+# Conclusiones Preliminares
+
+1. **Integridad de Datos:** La aplicación de filtros de cordura (*sanity checks*) eliminó distorsiones por errores de digitación (estancias > 1 año), permitiendo una estimación robusta de los promedios.
+2. **Eficiencia:** [Espacio para conclusión basada en el gráfico de cajas: Ej. Se observa mayor dispersión en el sector público...].
+3. **Mortalidad:** Existe una disparidad observable entre sectores. Sin embargo, cualquier comparación directa de calidad debe ajustarse por la complejidad del caso (CIE-10), dado que el sector público suele absorber las patologías de mayor costo y riesgo catastrófico.
+
+---
+
+*Generado automáticamente por el equipo de Ciencia de Datos de la UNACH.*
